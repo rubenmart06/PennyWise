@@ -1,5 +1,6 @@
 package cnu.ssd.pennywise.entity;
 
+import cnu.ssd.pennywise.model.User;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -9,7 +10,7 @@ import java.util.Set;
 /**
  * JPA entity backing the {@code users} table in the cloud-hosted PostgreSQL database.
  * Holds the stored account record only, never exposed directly to the Swing GUI;
- * {@link com.pennywise.model.User} is the plain view-model handed to the presentation layer.
+ * {@link User} is the plain view-model handed to the presentation layer.
  */
 @Entity
 @Getter

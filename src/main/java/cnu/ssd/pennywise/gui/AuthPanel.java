@@ -1,5 +1,6 @@
 package cnu.ssd.pennywise.gui;
 
+import cnu.ssd.pennywise.controller.AuthController;
 import cnu.ssd.pennywise.gui.components.AeroButton;
 import cnu.ssd.pennywise.gui.components.AeroPanel;
 import cnu.ssd.pennywise.gui.components.Backdrop;
@@ -24,7 +25,7 @@ import javax.swing.border.LineBorder;
  * The entry screen (View / Boundary): login and sign-up forms.
  * <p>
  * Contains no business logic: it never talks to a Service or a Repository.
- * {@link com.pennywise.controller.AuthController} reads the fields below via
+ * {@link AuthController} reads the fields below via
  * their getters and attaches its own listeners to {@link #getLoginButton()} and
  * {@link #getRegisterButton()}.
  */
