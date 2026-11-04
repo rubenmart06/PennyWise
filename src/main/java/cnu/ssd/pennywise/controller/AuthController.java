@@ -7,10 +7,12 @@ import javax.swing.JOptionPane;
 import javax.swing.SwingWorker;
 
 import cnu.ssd.pennywise.exception.AuthException;
+import cnu.ssd.pennywise.gui.AppFrame;
 import cnu.ssd.pennywise.gui.AuthPanel;
 import cnu.ssd.pennywise.model.Session;
 import cnu.ssd.pennywise.model.User;
 import cnu.ssd.pennywise.service.AuthService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,25 +26,34 @@ public class AuthController {
 
     private final AuthService authService;
     private final Session session;
+    private final AppFrame appFrame;
+    private final HouseholdController householdController;
     private final AuthPanel authPanel = new AuthPanel();
 
-    private JFrame frame;
-
-    public AuthController(AuthService authService, Session session) {
+    /**
+     * {@code @Lazy} on {@link HouseholdController} breaks the otherwise circular
+     * dependency: Auth hands off to Household on login, Household hands back to
+     * Auth on logout. Spring resolves this side through a lazy-init proxy instead
+     * of eagerly constructing both beans at once.
+     */
+    public AuthController(AuthService authService, Session session, AppFrame appFrame,
+                          @Lazy HouseholdController householdController) {
         this.authService = authService;
         this.session = session;
+        this.appFrame = appFrame;
+        this.householdController = householdController;
         wireListeners();
     }
 
-    /** Builds the main {@link JFrame}, sets {@link AuthPanel} as its content, and shows it. */
+    /** Shows {@link AuthPanel} in the shared {@link AppFrame}. */
     public void startApplication() {
-        frame = new JFrame("PennyWise — Household Account Book");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setContentPane(authPanel);
-        frame.setSize(1200, 780);
-        frame.setMinimumSize(new Dimension(1050, 700));
-        frame.setLocationRelativeTo(null);
-        frame.setVisible(true);
+        appFrame.show(authPanel);
+    }
+
+    /** Called by {@link HouseholdController} on logout, to return to the login screen. */
+    public void showLoginScreen() {
+        authPanel.showLogin();
+        appFrame.show(authPanel);
     }
 
     private void wireListeners() {
@@ -68,9 +79,7 @@ public class AuthController {
                     User user = get();
                     session.login(user);
                     authPanel.clearLoginFields();
-                    JOptionPane.showMessageDialog(frame, "Welcome back, " + user.getUsername() + "!",
-                            "Login successful", JOptionPane.INFORMATION_MESSAGE);
-                    // Phase 2 replaces this line with opening the Household Hub screen.
+                    householdController.openHouseholdHub();
                 } catch (ExecutionException ex) {
                     showError(authErrorMessage(ex), "Login failed");
                 } catch (InterruptedException ex) {
@@ -104,7 +113,7 @@ public class AuthController {
                 try {
                     User user = get();
                     authPanel.clearRegisterFields();
-                    JOptionPane.showMessageDialog(frame, "Account created for " + user.getUsername()
+                    JOptionPane.showMessageDialog(appFrame.getFrame(), "Account created for " + user.getUsername()
                                     + ". You can log in now.", "Registration successful",
                             JOptionPane.INFORMATION_MESSAGE);
                     authPanel.showLogin();
@@ -118,12 +127,14 @@ public class AuthController {
     }
 
     private String authErrorMessage(ExecutionException ex) {
-        return ex.getCause() instanceof AuthException
-                ? ex.getCause().getMessage()
-                : "Something went wrong. Please try again.";
+        if (ex.getCause() instanceof AuthException) {
+            return ex.getCause().getMessage();
+        }
+        ex.getCause().printStackTrace();
+        return "Something went wrong. Please try again.";
     }
 
     private void showError(String message, String title) {
-        JOptionPane.showMessageDialog(frame, message, title, JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(appFrame.getFrame(), message, title, JOptionPane.ERROR_MESSAGE);
     }
 }

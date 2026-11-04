@@ -9,9 +9,7 @@ import lombok.*;
 @ToString(onlyExplicitlyIncluded = true)
 public class User {
     private Long id;
-
     @ToString.Include
     private String username;
-
     private String email;
 }
