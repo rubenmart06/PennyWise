@@ -10,10 +10,9 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.xssf.usermodel.XSSFSheet;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+
+import org.dhatim.fastexcel.Workbook;
+import org.dhatim.fastexcel.Worksheet;
 import org.springframework.stereotype.Service;
 
 /**
@@ -37,21 +36,22 @@ public class ExportService {
     public byte[] exportToExcel(Long householdId, TransactionFilter filter) {
         List<Transaction> transactions = transactionService.searchTransactions(householdId, filter);
 
-        try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            XSSFSheet sheet = workbook.createSheet("Transactions");
-            Row header = sheet.createRow(0);
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Workbook workbook = new Workbook(out, "PennyWise", "1.0");
+            Worksheet sheet = workbook.newWorksheet("Transactions");
+
             for (int i = 0; i < HEADERS.length; i++) {
-                header.createCell(i).setCellValue(HEADERS[i]);
+                sheet.value(0, i, HEADERS[i]);
+                sheet.style(0, i).bold().set(); // Opcional: pone la cabecera en negrita
             }
+
             int rowIndex = 1;
             for (Transaction t : transactions) {
-                Row row = sheet.createRow(rowIndex++);
-                writeRow(row, t);
+                writeRow(sheet, rowIndex++, t);
             }
-            for (int i = 0; i < HEADERS.length; i++) {
-                sheet.autoSizeColumn(i);
-            }
-            workbook.write(out);
+
+            workbook.finish();
+
             return out.toByteArray();
         } catch (IOException ex) {
             throw new ExportException("Could not generate the Excel file.");
@@ -73,11 +73,10 @@ public class ExportService {
         }
     }
 
-    private void writeRow(Row row, Transaction t) {
+    private void writeRow(Worksheet sheet, int r, Transaction t) {
         String[] values = toCsvRow(t);
         for (int i = 0; i < values.length; i++) {
-            Cell cell = row.createCell(i);
-            cell.setCellValue(values[i]);
+            sheet.value(r, i, values[i]);
         }
     }
 

@@ -29,7 +29,7 @@ import javax.swing.border.LineBorder;
 import javax.swing.table.DefaultTableModel;
 
 /**
- * The categories & budgets view (View / Boundary): a table of categories
+ * The categories and budgets view (View / Boundary): a table of categories
  * with Create/Edit/Delete actions, plus the household-wide global limit (with
  * its own {@link BudgetBar}) and a usage bar per category that has a limit.
  * Extracted and modularized from the prototype's {@code budgets()} page.
