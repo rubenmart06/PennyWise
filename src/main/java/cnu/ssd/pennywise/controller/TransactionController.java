@@ -20,8 +20,10 @@ import cnu.ssd.pennywise.gui.AppFrame;
 import cnu.ssd.pennywise.gui.TransactionFormDialog;
 import cnu.ssd.pennywise.gui.TransactionPanel;
 import cnu.ssd.pennywise.model.*;
+import cnu.ssd.pennywise.service.BudgetService;
 import cnu.ssd.pennywise.service.CurrencyService;
 import cnu.ssd.pennywise.service.TransactionService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 /**
@@ -37,35 +39,79 @@ public class TransactionController {
 
     private final TransactionService transactionService;
     private final CurrencyService currencyService;
+    private final BudgetService budgetService;
     private final HouseholdContext householdContext;
     private final Session session;
     private final AppFrame appFrame;
+    private final ExportController exportController;
     private final TransactionPanel panel = new TransactionPanel();
 
     public TransactionController(TransactionService transactionService, CurrencyService currencyService,
-                                 HouseholdContext householdContext, Session session, AppFrame appFrame) {
+                                 BudgetService budgetService, HouseholdContext householdContext, Session session,
+                                 AppFrame appFrame, @Lazy ExportController exportController) {
         this.transactionService = transactionService;
         this.currencyService = currencyService;
+        this.budgetService = budgetService;
         this.householdContext = householdContext;
         this.session = session;
         this.appFrame = appFrame;
+        this.exportController = exportController;
         panel.getAddButton().addActionListener(e -> openCreateDialog());
+        panel.getEditButton().addActionListener(e -> openEditDialog());
+        panel.getDeleteButton().addActionListener(e -> handleDelete());
+        panel.getSearchButton().addActionListener(e -> applyFilters());
+        panel.getClearFiltersButton().addActionListener(e -> {
+            panel.clearFilters();
+            applyFilters();
+        });
+        panel.getExportButton().addActionListener(e -> exportController.openExportDialog(currentFilter()));
     }
 
     public JComponent getPanel() {
         return panel;
     }
 
-    /** Reloads the panel's table from the current household. */
+    /** Reloads the panel: repopulates the member filter from the current household, then re-applies its filters. */
     public void refresh() {
+        panel.setMembers(householdContext.getCurrentHousehold().getMembers());
+        Long householdId = householdContext.getCurrentHouseholdId();
+        new SwingWorker<List<Category>, Void>() {
+            @Override
+            protected List<Category> doInBackground() {
+                return budgetService.getCategories(householdId);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    panel.setCategories(get());
+                } catch (ExecutionException ex) {
+                    ex.getCause().printStackTrace();
+                    panel.setCategories(List.of());
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+                applyFilters();
+            }
+        }.execute();
+    }
+
+    private void applyFilters() {
         Long householdId = householdContext.getCurrentHouseholdId();
         String primaryCurrency = householdContext.getCurrentHousehold().getPrimaryCurrency();
+        TransactionFilter filter;
+        try {
+            filter = currentFilter();
+        } catch (DateTimeParseException ex) {
+            showError(panel, "Enter dates as yyyy-mm-dd.");
+            return;
+        }
 
         panel.getAddButton().setEnabled(false);
         new SwingWorker<List<Transaction>, Void>() {
             @Override
             protected List<Transaction> doInBackground() {
-                return transactionService.getTransactionsForHousehold(householdId);
+                return transactionService.searchTransactions(householdId, filter);
             }
 
             @Override
@@ -83,16 +129,107 @@ public class TransactionController {
         }.execute();
     }
 
-    private void openCreateDialog() {
-        Household household = householdContext.getCurrentHousehold();
-        TransactionFormDialog dialog = new TransactionFormDialog(appFrame.getFrame());
-        dialog.setMembers(household.getMembers());
-        dialog.selectPayerById(session.getCurrentUser().getId());
-        dialog.getCurrencyComboBox().setSelectedItem(household.getPrimaryCurrency());
+    private TransactionFilter currentFilter() {
+        LocalDate fromDate = parseOrNull(panel.getFromDateText());
+        LocalDate toDate = parseOrNull(panel.getToDateText());
+        return new TransactionFilter(fromDate, toDate, panel.getCategoryFilterText(),
+                panel.getSelectedMemberFilterUserId(), panel.getKeywordFilterText());
+    }
 
-        wireConversionPreview(dialog, household);
-        dialog.getCreateButton().addActionListener(e -> handleCreateTransaction(dialog, household));
-        dialog.setVisible(true);
+    private LocalDate parseOrNull(String text) {
+        String trimmed = text == null ? "" : text.trim();
+        return trimmed.isEmpty() ? null : LocalDate.parse(trimmed);
+    }
+
+    private void openCreateDialog() {
+        loadCategoriesThen(categories -> {
+            Household household = householdContext.getCurrentHousehold();
+            TransactionFormDialog dialog = new TransactionFormDialog(appFrame.getFrame());
+            dialog.setMembers(household.getMembers());
+            dialog.setCategories(categories);
+            dialog.selectPayerById(session.getCurrentUser().getId());
+            dialog.getCurrencyComboBox().setSelectedItem(household.getPrimaryCurrency());
+
+            wireConversionPreview(dialog, household);
+            dialog.getCreateButton().addActionListener(e -> handleCreateTransaction(dialog, household));
+            dialog.setVisible(true);
+        });
+    }
+
+    private void openEditDialog() {
+        Transaction existing = panel.getSelectedTransaction();
+        if (existing == null) {
+            showError(panel, "Select a transaction to edit first.");
+            return;
+        }
+        if (existing.getCategoryId() == null) {
+            showError(panel, "Debt settlement records are generated automatically and can't be edited.");
+            return;
+        }
+        loadCategoriesThen(categories -> {
+            Household household = householdContext.getCurrentHousehold();
+            TransactionFormDialog dialog = new TransactionFormDialog(appFrame.getFrame());
+            dialog.setMembers(household.getMembers());
+            dialog.setCategories(categories);
+            populateForEdit(dialog, existing);
+
+            wireConversionPreview(dialog, household);
+            dialog.getCreateButton().addActionListener(e -> handleUpdateTransaction(dialog, household, existing.getId()));
+            dialog.setVisible(true);
+        });
+    }
+
+    /** Loads the household's categories on a worker, then hands them to {@code next} on the EDT. */
+    private void loadCategoriesThen(java.util.function.Consumer<List<Category>> next) {
+        Long householdId = householdContext.getCurrentHouseholdId();
+        panel.getAddButton().setEnabled(false);
+        new SwingWorker<List<Category>, Void>() {
+            @Override
+            protected List<Category> doInBackground() {
+                return budgetService.getCategories(householdId);
+            }
+
+            @Override
+            protected void done() {
+                panel.getAddButton().setEnabled(true);
+                try {
+                    List<Category> categories = get();
+                    if (categories.isEmpty()) {
+                        showError(panel, "This household has no categories yet. Create one in the Budgets section first.");
+                        return;
+                    }
+                    next.accept(categories);
+                } catch (ExecutionException ex) {
+                    ex.getCause().printStackTrace();
+                    showError(appFrame.getFrame(), "Could not load categories. Please try again.");
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    private void populateForEdit(TransactionFormDialog dialog, Transaction existing) {
+        dialog.getTypeComboBox().setSelectedItem(existing.getType() == TransactionType.INCOME ? "Income" : "Expense");
+        dialog.selectCategoryById(existing.getCategoryId());
+        dialog.getDateField().setText(existing.getDate().toString());
+        dialog.getAmountField().setText(existing.getOriginalAmount().toPlainString());
+        dialog.getCurrencyComboBox().setSelectedItem(existing.getCurrencyCode());
+        dialog.getDescriptionField().setText(existing.getDescription());
+        dialog.selectPayerById(existing.getPayerUserId());
+
+        boolean shared = existing.isShared();
+        dialog.getScopeComboBox().setSelectedItem(shared ? "Shared" : "Individual");
+        if (shared) {
+            Map<Long, BigDecimal> shareByUserId = new LinkedHashMap<>();
+            for (SplitDetail split : existing.getSplits()) {
+                shareByUserId.put(split.getUserId(), split.getShareAmount());
+            }
+            for (TransactionFormDialog.MemberSplitRow row : dialog.getMemberSplitRows()) {
+                Long userId = row.getMember().getUser().getId();
+                row.getIncludeCheckBox().setSelected(shareByUserId.containsKey(userId));
+            }
+        }
     }
 
     private void wireConversionPreview(TransactionFormDialog dialog, Household household) {
@@ -116,7 +253,7 @@ public class TransactionController {
                 protected void done() {
                     try {
                         BigDecimal converted = get();
-                        dialog.setConversionPreviewText("\u2248 " + converted + " " + household.getPrimaryCurrency());
+                        dialog.setConversionPreviewText("≈ " + converted + " " + household.getPrimaryCurrency());
                     } catch (ExecutionException ex) {
                         if (ex.getCause() instanceof RateNotConfiguredException rnc) {
                             dialog.setConversionPreviewText("No exchange rate set for " + rnc.getCurrencyCode() + ".");
@@ -171,6 +308,146 @@ public class TransactionController {
     }
 
     private void handleCreateTransaction(TransactionFormDialog dialog, Household household) {
+        TransactionInput input = readInput(dialog);
+        if (input == null) {
+            return;
+        }
+
+        dialog.getCreateButton().setEnabled(false);
+        new SwingWorker<Transaction, Void>() {
+            @Override
+            protected Transaction doInBackground() {
+                return transactionService.createTransaction(household.getId(), input.payerUserId, input.type, input.date,
+                        input.categoryId, input.description, input.currency, input.amount, input.scope,
+                        input.sharedMemberIds, input.percentages);
+            }
+
+            @Override
+            protected void done() {
+                dialog.getCreateButton().setEnabled(true);
+                try {
+                    Transaction created = get();
+                    dialog.dispose();
+                    refresh();
+                    warnIfBudgetExceeded(household.getId(), created);
+                } catch (ExecutionException ex) {
+                    handleTransactionError(ex, dialog);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    private void handleUpdateTransaction(TransactionFormDialog dialog, Household household, Long transactionId) {
+        TransactionInput input = readInput(dialog);
+        if (input == null) {
+            return;
+        }
+
+        dialog.getCreateButton().setEnabled(false);
+        new SwingWorker<Transaction, Void>() {
+            @Override
+            protected Transaction doInBackground() {
+                return transactionService.updateTransaction(transactionId, input.payerUserId, input.type, input.date,
+                        input.categoryId, input.description, input.currency, input.amount, input.scope,
+                        input.sharedMemberIds, input.percentages);
+            }
+
+            @Override
+            protected void done() {
+                dialog.getCreateButton().setEnabled(true);
+                try {
+                    Transaction updated = get();
+                    dialog.dispose();
+                    applyFilters();
+                    warnIfBudgetExceeded(household.getId(), updated);
+                } catch (ExecutionException ex) {
+                    handleTransactionError(ex, dialog);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    private void handleDelete() {
+        Transaction existing = panel.getSelectedTransaction();
+        if (existing == null) {
+            showError(panel, "Select a transaction to delete first.");
+            return;
+        }
+        int confirm = JOptionPane.showConfirmDialog(panel, "Delete this transaction?", "Confirm delete",
+                JOptionPane.YES_NO_OPTION);
+        if (confirm != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        panel.getDeleteButton().setEnabled(false);
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                transactionService.deleteTransaction(existing.getId());
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                panel.getDeleteButton().setEnabled(true);
+                try {
+                    get();
+                    applyFilters();
+                } catch (ExecutionException ex) {
+                    ex.getCause().printStackTrace();
+                    showError(panel, "Could not delete the transaction. Please try again.");
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    /** Checks the just-saved expense against its category/global limit and shows a non-blocking warning (requirement 12). */
+    private void warnIfBudgetExceeded(Long householdId, Transaction transaction) {
+        if (transaction.getType() != TransactionType.EXPENSE) {
+            return;
+        }
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                return budgetService.checkLimitExceeded(householdId, transaction.getCategory(), transaction.getConvertedAmount());
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String warning = get();
+                    if (warning != null) {
+                        JOptionPane.showMessageDialog(appFrame.getFrame(), warning, "Budget limit exceeded",
+                                JOptionPane.WARNING_MESSAGE);
+                    }
+                } catch (ExecutionException ex) {
+                    ex.getCause().printStackTrace();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    private void handleTransactionError(ExecutionException ex, TransactionFormDialog dialog) {
+        if (ex.getCause() instanceof RateNotConfiguredException rnc) {
+            dialog.setConversionPreviewText("No exchange rate set for " + rnc.getCurrencyCode() + ".");
+            dialog.showRatePrompt(rnc.getCurrencyCode());
+        } else if (ex.getCause() instanceof TransactionException) {
+            showError(dialog, ex.getCause().getMessage());
+        } else {
+            ex.getCause().printStackTrace();
+            showError(dialog, "Something went wrong. Please try again.");
+        }
+    }
+
+    private TransactionInput readInput(TransactionFormDialog dialog) {
         TransactionType type = "Income".equals(dialog.getTypeComboBox().getSelectedItem())
                 ? TransactionType.INCOME : TransactionType.EXPENSE;
 
@@ -179,23 +456,27 @@ public class TransactionController {
             date = LocalDate.parse(dialog.getDateField().getText().trim());
         } catch (DateTimeParseException ex) {
             showError(dialog, "Enter the date as yyyy-mm-dd.");
-            return;
+            return null;
         }
 
         BigDecimal amount = parsePositiveAmount(dialog.getAmountField().getText());
         if (amount == null) {
             showError(dialog, "Amount must be a positive number.");
-            return;
+            return null;
         }
 
         String currency = currencyOf(dialog);
-        String category = dialog.getCategoryField().getText();
+        Category category = (Category) dialog.getCategoryComboBox().getSelectedItem();
+        if (category == null) {
+            showError(dialog, "Select a category.");
+            return null;
+        }
         String description = dialog.getDescriptionField().getText();
 
         Member payer = (Member) dialog.getPayerComboBox().getSelectedItem();
         if (payer == null) {
             showError(dialog, "Select who paid.");
-            return;
+            return null;
         }
 
         boolean shared = "Shared".equals(dialog.getScopeComboBox().getSelectedItem());
@@ -219,41 +500,8 @@ public class TransactionController {
             }
         }
 
-        Long householdId = household.getId();
-        Long payerUserId = payer.getUser().getId();
-        List<Long> finalSharedMemberIds = sharedMemberIds;
-        Map<Long, BigDecimal> finalPercentages = percentages;
-
-        dialog.getCreateButton().setEnabled(false);
-        new SwingWorker<Transaction, Void>() {
-            @Override
-            protected Transaction doInBackground() {
-                return transactionService.createTransaction(householdId, payerUserId, type, date, category,
-                        description, currency, amount, scope, finalSharedMemberIds, finalPercentages);
-            }
-
-            @Override
-            protected void done() {
-                dialog.getCreateButton().setEnabled(true);
-                try {
-                    get();
-                    dialog.dispose();
-                    refresh();
-                } catch (ExecutionException ex) {
-                    if (ex.getCause() instanceof RateNotConfiguredException rnc) {
-                        dialog.setConversionPreviewText("No exchange rate set for " + rnc.getCurrencyCode() + ".");
-                        dialog.showRatePrompt(rnc.getCurrencyCode());
-                    } else if (ex.getCause() instanceof TransactionException) {
-                        showError(dialog, ex.getCause().getMessage());
-                    } else {
-                        ex.getCause().printStackTrace();
-                        showError(dialog, "Something went wrong. Please try again.");
-                    }
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }.execute();
+        return new TransactionInput(type, date, category.getId(), description, currency, amount, payer.getUser().getId(),
+                scope, sharedMemberIds, percentages);
     }
 
     private String currencyOf(TransactionFormDialog dialog) {
@@ -292,5 +540,34 @@ public class TransactionController {
                 callback.run();
             }
         };
+    }
+
+    /** Plain holder for a validated form's fields, shared by create and update. */
+    private static final class TransactionInput {
+        final TransactionType type;
+        final LocalDate date;
+        final Long categoryId;
+        final String description;
+        final String currency;
+        final BigDecimal amount;
+        final Long payerUserId;
+        final TransactionScope scope;
+        final List<Long> sharedMemberIds;
+        final Map<Long, BigDecimal> percentages;
+
+        TransactionInput(TransactionType type, LocalDate date, Long categoryId, String description, String currency,
+                         BigDecimal amount, Long payerUserId, TransactionScope scope, List<Long> sharedMemberIds,
+                         Map<Long, BigDecimal> percentages) {
+            this.type = type;
+            this.date = date;
+            this.categoryId = categoryId;
+            this.description = description;
+            this.currency = currency;
+            this.amount = amount;
+            this.payerUserId = payerUserId;
+            this.scope = scope;
+            this.sharedMemberIds = sharedMemberIds;
+            this.percentages = percentages;
+        }
     }
 }

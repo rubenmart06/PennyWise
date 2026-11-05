@@ -5,7 +5,9 @@ import cnu.ssd.pennywise.gui.components.AeroButton;
 import cnu.ssd.pennywise.gui.components.AeroPanel;
 import cnu.ssd.pennywise.gui.components.Backdrop;
 import cnu.ssd.pennywise.gui.components.UiTheme;
+import cnu.ssd.pennywise.model.Category;
 import cnu.ssd.pennywise.model.Member;
+import cnu.ssd.pennywise.model.TransactionType;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -52,7 +54,8 @@ public class TransactionFormDialog extends JDialog {
     private final JTextField amountField = textField("", 10);
     private final JComboBox<String> currencyComboBox = new JComboBox<>(new String[]{"EUR", "USD", "KRW", "GBP", "JPY"});
     private final JLabel conversionPreviewLabel = new JLabel(" ");
-    private final JTextField categoryField = textField("", 14);
+    private final JComboBox<Category> categoryComboBox = new JComboBox<>();
+    private List<Category> allCategories = List.of();
     private final JTextField descriptionField = textField("", 14);
     private final JComboBox<Member> payerComboBox = new JComboBox<>();
     private final JComboBox<String> scopeComboBox = new JComboBox<>(new String[]{"Individual", "Shared"});
@@ -74,7 +77,7 @@ public class TransactionFormDialog extends JDialog {
     public TransactionFormDialog(Frame owner) {
         super(owner, "Add financial record", true);
 
-        for (JComboBox<?> combo : List.of(typeComboBox, currencyComboBox, payerComboBox, scopeComboBox, splitModeComboBox)) {
+        for (JComboBox<?> combo : List.of(typeComboBox, currencyComboBox, categoryComboBox, payerComboBox, scopeComboBox, splitModeComboBox)) {
             combo.setFont(new Font(UiTheme.FONT, Font.PLAIN, 13));
             combo.setBackground(Color.WHITE);
         }
@@ -101,7 +104,7 @@ public class TransactionFormDialog extends JDialog {
         addRow(form, c, 3, "Currency", currencyComboBox);
         addFullRow(form, c, 4, conversionPreviewLabel);
         addFullRow(form, c, 5, ratePromptPanel);
-        addRow(form, c, 6, "Category", categoryField);
+        addRow(form, c, 6, "Category", categoryComboBox);
         addRow(form, c, 7, "Description", descriptionField);
         addRow(form, c, 8, "Paid by", payerComboBox);
         addRow(form, c, 9, "Scope", scopeComboBox);
@@ -117,6 +120,7 @@ public class TransactionFormDialog extends JDialog {
         setContentPane(background);
 
         cancelButton.addActionListener(e -> dispose());
+        typeComboBox.addItemListener(e -> refreshCategoryChoices());
         scopeComboBox.addItemListener(e -> {
             sharedPanel.setVisible("Shared".equals(scopeComboBox.getSelectedItem()));
             pack();
@@ -187,6 +191,34 @@ public class TransactionFormDialog extends JDialog {
         pack();
     }
 
+    /** Gives the dialog the household's categories; the combo shows only those matching the chosen type. */
+    public void setCategories(List<Category> categories) {
+        this.allCategories = categories;
+        refreshCategoryChoices();
+    }
+
+    /** Preselects a category by id (edit mode). Set the type first, since the combo is filtered by it. */
+    public void selectCategoryById(Long categoryId) {
+        for (int i = 0; i < categoryComboBox.getItemCount(); i++) {
+            if (categoryComboBox.getItemAt(i).getId().equals(categoryId)) {
+                categoryComboBox.setSelectedIndex(i);
+                return;
+            }
+        }
+    }
+
+    /** Repopulates the category combo with the categories whose type matches the type combo. */
+    private void refreshCategoryChoices() {
+        TransactionType type = "Income".equals(typeComboBox.getSelectedItem())
+                ? TransactionType.INCOME : TransactionType.EXPENSE;
+        categoryComboBox.removeAllItems();
+        for (Category category : allCategories) {
+            if (category.getType() == type) {
+                categoryComboBox.addItem(category);
+            }
+        }
+    }
+
     /** Preselects the payer combo by user id \u2014 a plain selection of an already-provided item, not business logic. */
     public void selectPayerById(Long userId) {
         for (int i = 0; i < payerComboBox.getItemCount(); i++) {
@@ -202,10 +234,10 @@ public class TransactionFormDialog extends JDialog {
         conversionPreviewLabel.setText(text);
     }
 
-    /** Shows the inline "define a rate for X" prompt. */
+    /** Shows the inline "define a rate for X" prompt (use case V.5, alt path 4.1). */
     public void showRatePrompt(String currencyCode) {
         promptedCurrencyCode = currencyCode;
-        ratePromptLabel.setText("No static rate for " + currencyCode + " yet, enter one (1 primary unit = ? " + currencyCode + "):");
+        ratePromptLabel.setText("No static rate for " + currencyCode + " yet \u2014 enter one (1 primary unit = ? " + currencyCode + "):");
         rateField.setText("");
         ratePromptPanel.setVisible(true);
         pack();
@@ -238,8 +270,8 @@ public class TransactionFormDialog extends JDialog {
         return currencyComboBox;
     }
 
-    public JTextField getCategoryField() {
-        return categoryField;
+    public JComboBox<Category> getCategoryComboBox() {
+        return categoryComboBox;
     }
 
     public JTextField getDescriptionField() {

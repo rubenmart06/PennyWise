@@ -36,6 +36,8 @@ import java.util.List;
 @Table(name = "transactions")
 public class TransactionEntity {
 
+    public static final String SETTLEMENT_LABEL = "Debt settlement";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -51,8 +53,9 @@ public class TransactionEntity {
     @Column(nullable = false)
     private LocalDate date;
 
-    @Column(nullable = false, length = 80)
-    private String category;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "category_id")
+    private CategoryEntity category;
 
     @Column(length = 255)
     private String description;
@@ -77,4 +80,9 @@ public class TransactionEntity {
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "transaction_splits", joinColumns = @JoinColumn(name = "transaction_id"))
     private List<SplitShareEmbeddable> splits = new ArrayList<>();
+
+    /** Display name of the category; settlement records (no category) read "Debt settlement". */
+    public String getCategoryName() {
+        return category == null ? SETTLEMENT_LABEL : category.getName();
+    }
 }

@@ -33,4 +33,8 @@ public class HouseholdEntity {
 
     @Column(name = "primary_currency", nullable = false, length = 3)
     private String primaryCurrency;
+
+    /** Household-wide monthly budget limit; null means none set. */
+    @Column(name = "global_budget_limit", precision = 12, scale = 2)
+    private java.math.BigDecimal globalBudgetLimit;
 }

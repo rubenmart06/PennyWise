@@ -23,6 +23,7 @@ public class Transaction {
     private final Long id;
     private final TransactionType type;
     private final LocalDate date;
+    private final Long categoryId;
     private final String category;
     private final String description;
     private final Long payerUserId;
