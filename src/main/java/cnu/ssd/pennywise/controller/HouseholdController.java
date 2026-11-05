@@ -13,12 +13,14 @@ import cnu.ssd.pennywise.model.Household;
 import cnu.ssd.pennywise.model.HouseholdKind;
 import cnu.ssd.pennywise.model.Session;
 import cnu.ssd.pennywise.service.HouseholdService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 /**
  * Drives {@link HouseholdHubPanel} and {@link HouseholdFormDialog}: loads the
  * current user's households, handles household creation, and routes between
- * the hub and (via {@link AuthController}) the login screen on logout. Every
+ * the hub and (via {@link AuthController}) the login screen on logout, or
+ * (via {@link MainDashboardController}) a selected household's dashboard. Every
  * call into {@link HouseholdService} runs on a {@link SwingWorker} so a slow
  * database round trip never freezes the Event Dispatch Thread.
  */
@@ -29,14 +31,23 @@ public class HouseholdController {
     private final Session session;
     private final AppFrame appFrame;
     private final AuthController authController;
+    private final MainDashboardController mainDashboardController;
     private final HouseholdHubPanel hubPanel = new HouseholdHubPanel();
 
+
+    /**
+     * {@code @Lazy} on {@link MainDashboardController} breaks the otherwise
+     * circular dependency, the same way it broke the Auth↔Household one:
+     * Household hands off to the dashboard when a household is opened, the
+     * dashboard hands back to Household on "switch household" and "log out".
+     */
     public HouseholdController(HouseholdService householdService, Session session, AppFrame appFrame,
-                               AuthController authController) {
+                               AuthController authController, @Lazy MainDashboardController mainDashboardController) {
         this.householdService = householdService;
         this.session = session;
         this.appFrame = appFrame;
         this.authController = authController;
+        this.mainDashboardController = mainDashboardController;
         wireListeners();
     }
 
@@ -50,7 +61,7 @@ public class HouseholdController {
     private void wireListeners() {
         hubPanel.setOnCreateHousehold(this::openCreateHouseholdDialog);
         hubPanel.setOnHouseholdSelected(this::handleHouseholdSelected);
-        hubPanel.getLogoutButton().addActionListener(e -> handleLogout());
+        hubPanel.getLogoutButton().addActionListener(e -> logout());
     }
 
     private void loadHouseholds() {
@@ -119,13 +130,11 @@ public class HouseholdController {
     }
 
     private void handleHouseholdSelected(Household household) {
-        // Phase 3 replaces this with opening the household's own dashboard (MainDashboardFrame).
-        JOptionPane.showMessageDialog(appFrame.getFrame(),
-                "Opened \"" + household.getName() + "\". Its dashboard will be built in a later phase.",
-                "Household opened", JOptionPane.INFORMATION_MESSAGE);
+        mainDashboardController.open(household);
     }
 
-    private void handleLogout() {
+    /** Called by {@link MainDashboardController} when the user logs out from the dashboard. */
+    public void logout() {
         session.logout();
         authController.showLoginScreen();
     }

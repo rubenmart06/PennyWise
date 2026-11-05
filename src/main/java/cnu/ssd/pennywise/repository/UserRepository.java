@@ -7,8 +7,7 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 
 /**
- * Spring Data JPA repository for {@link UserEntity}. No implementation to write \u2014
- * Spring generates it at startup from the method names below.
+ * Spring Data JPA repository for {@link UserEntity}.
  */
 @Repository
 public interface UserRepository extends JpaRepository<UserEntity, Long> {
